@@ -5,14 +5,15 @@ import '../models/savings_goal.dart';
 class SavingsScreen extends StatelessWidget {
   const SavingsScreen({super.key});
 
-  void _showAddGoalDialog(BuildContext context) {
-    final nameController = TextEditingController();
-    final amountController = TextEditingController();
+  void _showAddGoalDialog(BuildContext context, {SavingsGoal? goal}) {
+    final isEditing = goal != null;
+    final nameController = TextEditingController(text: goal?.name ?? '');
+    final amountController = TextEditingController(text: goal?.targetAmount.toString() ?? '');
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("Nouvel Objectif"),
+        title: Text(isEditing ? "Modifier l'Objectif" : "Nouvel Objectif"),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -26,17 +27,29 @@ class SavingsScreen extends StatelessWidget {
             onPressed: () {
               final target = double.tryParse(amountController.text) ?? 0;
               if (nameController.text.isNotEmpty && target > 0) {
-                final goal = SavingsGoal(
-                  name: nameController.text,
-                  targetAmount: target,
-                  currentAmount: 0,
-                  colorCode: Colors.blue.value,
-                );
-                Hive.box<SavingsGoal>('savings').add(goal);
+                if (isEditing) {
+                  // Mise à jour (on garde le montant courant)
+                  final updated = SavingsGoal(
+                    name: nameController.text,
+                    targetAmount: target,
+                    currentAmount: goal.currentAmount,
+                    colorCode: goal.colorCode,
+                  );
+                  Hive.box<SavingsGoal>('savings').put(goal.key, updated);
+                } else {
+                  // Création
+                  final newGoal = SavingsGoal(
+                    name: nameController.text,
+                    targetAmount: target,
+                    currentAmount: 0,
+                    colorCode: Colors.blue.value,
+                  );
+                  Hive.box<SavingsGoal>('savings').add(newGoal);
+                }
                 Navigator.pop(ctx);
               }
             },
-            child: const Text("Créer"),
+            child: const Text("Sauvegarder"),
           )
         ],
       ),
@@ -72,6 +85,44 @@ class SavingsScreen extends StatelessWidget {
     );
   }
 
+  void _showOptions(BuildContext context, SavingsGoal goal) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => Wrap(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.add_circle, color: Colors.green),
+            title: const Text('Ajouter de l\'argent'),
+            onTap: () { Navigator.pop(ctx); _addMoneyToGoal(context, goal); },
+          ),
+          ListTile(
+            leading: const Icon(Icons.edit, color: Colors.blue),
+            title: const Text('Modifier l\'objectif'),
+            onTap: () { Navigator.pop(ctx); _showAddGoalDialog(context, goal: goal); },
+          ),
+          ListTile(
+            leading: const Icon(Icons.delete, color: Colors.red),
+            title: const Text('Supprimer'),
+            onTap: () {
+              Navigator.pop(ctx);
+              showDialog(
+                context: context,
+                builder: (dCtx) => AlertDialog(
+                  title: const Text("Supprimer ?"),
+                  content: const Text("Cette action est irréversible."),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(dCtx), child: const Text("Annuler")),
+                    TextButton(onPressed: () { goal.delete(); Navigator.pop(dCtx); }, child: const Text("Supprimer", style: TextStyle(color: Colors.red))),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final currency = Hive.box('settings').get('currency', defaultValue: '€');
@@ -97,8 +148,8 @@ class SavingsScreen extends StatelessWidget {
               return Card(
                 margin: const EdgeInsets.only(bottom: 16),
                 child: InkWell(
-                  onTap: () => _addMoneyToGoal(context, goal),
-                  onLongPress: () => goal.delete(),
+                  onTap: () => _addMoneyToGoal(context, goal), // Clic simple = Ajouter argent
+                  onLongPress: () => _showOptions(context, goal), // Clic long = Menu complet
                   child: Padding(
                     padding: const EdgeInsets.all(16.0),
                     child: Column(

@@ -1,19 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/subscription.dart';
+import '../models/transaction.dart';
 
 class SubscriptionsScreen extends StatelessWidget {
   const SubscriptionsScreen({super.key});
 
-  void _showAddSubDialog(BuildContext context) {
-    final nameController = TextEditingController();
-    final amountController = TextEditingController();
-    final dayController = TextEditingController();
+  void _showAddSubDialog(BuildContext context, {Subscription? sub}) {
+    final isEditing = sub != null;
+    final nameController = TextEditingController(text: sub?.name ?? '');
+    final amountController = TextEditingController(text: sub?.amount.toString() ?? '');
+    final dayController = TextEditingController(text: sub?.renewalDay.toString() ?? '');
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("Nouvel Abonnement"),
+        title: Text(isEditing ? "Modifier l'Abonnement" : "Nouvel Abonnement"),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -29,13 +31,89 @@ class SubscriptionsScreen extends StatelessWidget {
               final amount = double.tryParse(amountController.text) ?? 0;
               final day = int.tryParse(dayController.text) ?? 1;
               if (nameController.text.isNotEmpty && amount > 0) {
-                final sub = Subscription(name: nameController.text, amount: amount, renewalDay: day, period: 'Mensuel');
-                Hive.box<Subscription>('subscriptions').add(sub);
+                if (isEditing) {
+                  final updated = Subscription(name: nameController.text, amount: amount, renewalDay: day, period: 'Mensuel');
+                  Hive.box<Subscription>('subscriptions').put(sub.key, updated);
+                } else {
+                  final newSub = Subscription(name: nameController.text, amount: amount, renewalDay: day, period: 'Mensuel');
+                  Hive.box<Subscription>('subscriptions').add(newSub);
+                }
                 Navigator.pop(ctx);
               }
             },
-            child: const Text("Ajouter"),
+            child: const Text("Sauvegarder"),
           )
+        ],
+      ),
+    );
+  }
+
+  void _paySubscription(BuildContext context, Subscription sub) {
+    final currency = Hive.box('settings').get('currency', defaultValue: '€');
+    final boxTrans = Hive.box<Transaction>('transactions_v2');
+    final now = DateTime.now();
+
+    final alreadyPaid = boxTrans.values.any((t) {
+      return t.description == "Abonnement ${sub.name}" && 
+             t.date.month == now.month && 
+             t.date.year == now.year;
+    });
+
+    if (alreadyPaid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Déjà payé pour ce mois-ci !"), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    final transaction = Transaction(
+      description: "Abonnement ${sub.name}",
+      montant: sub.amount,
+      date: now,
+      estDepense: true,
+      category: "Abonnement", 
+    );
+    
+    boxTrans.add(transaction);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Dépense de ${sub.amount}$currency ajoutée !"), backgroundColor: Colors.green),
+    );
+  }
+
+  void _showOptions(BuildContext context, Subscription sub) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => Wrap(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.payment, color: Colors.green),
+            title: const Text('Payer ce mois-ci'),
+            onTap: () { Navigator.pop(ctx); _paySubscription(context, sub); },
+          ),
+          ListTile(
+            leading: const Icon(Icons.edit, color: Colors.blue),
+            title: const Text('Modifier'),
+            onTap: () { Navigator.pop(ctx); _showAddSubDialog(context, sub: sub); },
+          ),
+          ListTile(
+            leading: const Icon(Icons.delete, color: Colors.red),
+            title: const Text('Supprimer'),
+            onTap: () {
+              Navigator.pop(ctx);
+              showDialog(
+                context: context,
+                builder: (dCtx) => AlertDialog(
+                  title: const Text("Supprimer ?"),
+                  content: const Text("Cette action est irréversible."),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(dCtx), child: const Text("Annuler")),
+                    TextButton(onPressed: () { sub.delete(); Navigator.pop(dCtx); }, child: const Text("Supprimer", style: TextStyle(color: Colors.red))),
+                  ],
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -50,7 +128,6 @@ class SubscriptionsScreen extends StatelessWidget {
         valueListenable: Hive.box<Subscription>('subscriptions').listenable(),
         builder: (context, Box<Subscription> box, _) {
           final subs = box.values.toList();
-          
           double totalMonthly = 0;
           for (var s in subs) totalMonthly += s.amount;
 
@@ -63,10 +140,7 @@ class SubscriptionsScreen extends StatelessWidget {
                 child: Column(
                   children: [
                     const Text("Coût mensuel fixe", style: TextStyle(color: Colors.purple)),
-                    Text(
-                      "${totalMonthly.toStringAsFixed(2)} $currency",
-                      style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.purple),
-                    ),
+                    Text("${totalMonthly.toStringAsFixed(2)} $currency", style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.purple)),
                     Text("${(totalMonthly * 12).toStringAsFixed(0)} $currency / an", style: const TextStyle(color: Colors.grey)),
                   ],
                 ),
@@ -86,9 +160,10 @@ class SubscriptionsScreen extends StatelessWidget {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text("-${sub.amount.toStringAsFixed(2)} $currency", style: const TextStyle(fontWeight: FontWeight.bold)),
-                              IconButton(icon: const Icon(Icons.delete, size: 20, color: Colors.grey), onPressed: () => sub.delete()),
                             ],
                           ),
+                          onTap: () => _showOptions(context, sub),
+                          onLongPress: () => _showOptions(context, sub),
                         );
                       },
                     ),
